@@ -80,6 +80,9 @@ class LLMAPIClient:
                     "temperature": self._config.temperature,
                     "max_tokens": self._config.max_tokens,
                 }
+                enable_thinking = getattr(self._config, "enable_thinking", None)
+                if enable_thinking is not None:
+                    payload["enable_thinking"] = enable_thinking
 
                 response = httpx.post(
                     url,

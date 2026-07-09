@@ -15,7 +15,7 @@ UV_CACHE_DIR=/tmp/uv-cache uv run python tests/manual_single_file_pipeline.py da
 如果想把四段结果写成文件：
 
 ```bash
-UV_CACHE_DIR=/tmp/uv-cache uv run python tests/manual_single_file_pipeline.py data/20250401/323354/浙商期货_323354_0.html --output-dir /tmp/marketana_debug
+UV_CACHE_DIR=/tmp/uv-cache uv run python tests/manual_single_file_pipeline.py data/20250401/323354/浙商期货_323354_0.html --output-dir tests/outputs
 ```
 
 会输出/写入：

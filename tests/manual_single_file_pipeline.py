@@ -16,6 +16,7 @@ import argparse
 import sys
 from pathlib import Path
 
+from sqlalchemy import select
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
@@ -25,6 +26,7 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from back_end.app.core.database import Base, create_database_tables
+from back_end.app.models.article import TaskLog
 from back_end.app.repositories.articles import ArticleRepository
 from pn04.parser import parse_article
 from pn05.cleaner import clean_article
@@ -95,7 +97,12 @@ def main() -> None:
         if not args.skip_llm:
             config = LLMConfig.from_settings()
             if config.is_configured:
-                refined_text = refine_article(article.id, session, config=config) or ""
+                refined_text = refine_article(article.id, session, config=config) or latest_stage_message(
+                    repo,
+                    article.id,
+                    "refiner",
+                    default="LLM 精修失败：未返回精修文本，且未找到失败日志。",
+                )
                 session.commit()
             else:
                 refined_text = "LLM 精修已跳过：LLM API 未配置。"
@@ -186,6 +193,21 @@ def format_llm_result(llm_result) -> str:
     if llm_result.raw_response:
         lines.extend(["", "# LLM 原始响应", llm_result.raw_response])
     return "\n".join(lines).strip()
+
+
+def latest_stage_message(repo: ArticleRepository, article_id: int, stage: str, *, default: str) -> str:
+    repo.session.flush()
+    log = repo.session.scalar(
+        select(TaskLog)
+        .where(TaskLog.article_id == article_id, TaskLog.stage == stage)
+        .order_by(TaskLog.id.desc())
+        .limit(1)
+    )
+    if log is None:
+        return default
+    status = log.status or "unknown"
+    message = log.message or default
+    return f"{stage} {status}: {message}"
 
 
 def print_outputs(outputs: dict[str, str]) -> None:

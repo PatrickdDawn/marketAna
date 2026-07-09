@@ -10,6 +10,7 @@ from __future__ import annotations
 import logging
 import re
 import time
+from dataclasses import replace
 from typing import Any
 
 from pn07.models import LLMConfig
@@ -17,6 +18,8 @@ from pn07.models import LLMConfig
 logger = logging.getLogger(__name__)
 
 __all__ = ["refine_article", "build_refine_messages"]
+
+REFINE_CHUNK_CHARS = 1200
 
 
 SYSTEM_PROMPT = """你是一名中文财经研报编辑。请把清洗后的研报文本润色成通俗、自然、方便普通用户阅读的中文。
@@ -65,16 +68,37 @@ def refine_article(
             _log_failure(repo, article_id, "LLM API 未配置，跳过精修", elapsed_ms())
             return None
 
-        messages = build_refine_messages(cleaned_text, max_input_chars=config.max_input_chars)
+        refine_config = replace(config, max_tokens=max(config.max_tokens, 2000))
+        setattr(refine_config, "enable_thinking", False)
 
         from pn07.llm_client import LLMAPIClient
 
-        client = LLMAPIClient(config)
-        raw_response = client.chat(messages, retries=config.max_retries)
-        refined_text = _sanitize_refined_text(raw_response)
-        if not refined_text:
-            _log_failure(repo, article_id, "LLM 精修返回空文本", elapsed_ms())
-            return None
+        client = LLMAPIClient(refine_config)
+        refined_parts: list[str] = []
+        chunks = _split_refine_chunks(cleaned_text, max_chars=REFINE_CHUNK_CHARS)
+        for index, chunk in enumerate(chunks, start=1):
+            messages = build_refine_messages(
+                chunk,
+                max_input_chars=min(refine_config.max_input_chars, REFINE_CHUNK_CHARS),
+                chunk_index=index,
+                chunk_count=len(chunks),
+            )
+            raw_response = client.chat(messages, retries=refine_config.max_retries)
+            refined_part = _sanitize_refined_text(raw_response)
+            if not refined_part:
+                _log_failure(
+                    repo,
+                    article_id,
+                    (
+                        f"LLM 精修第 {index}/{len(chunks)} 段返回空文本，"
+                        "可能是模型未产出 message.content 或输出预算不足"
+                    ),
+                    elapsed_ms(),
+                )
+                return None
+            refined_parts.append(refined_part)
+
+        refined_text = "\n\n".join(refined_parts).strip()
 
         repo.save_refined_text(article_id=article_id, refined_text=refined_text)
         duration_ms = elapsed_ms()
@@ -84,7 +108,7 @@ def refine_article(
             status="success",
             message=(
                 f"[{duration_ms}ms] cleaned={len(cleaned_text)} "
-                f"refined={len(refined_text)} model={config.model}"
+                f"refined={len(refined_text)} model={refine_config.model}"
             ),
             duration_ms=duration_ms,
         )
@@ -98,7 +122,13 @@ def refine_article(
         return None
 
 
-def build_refine_messages(cleaned_text: str, *, max_input_chars: int = 8000) -> list[dict]:
+def build_refine_messages(
+    cleaned_text: str,
+    *,
+    max_input_chars: int = 8000,
+    chunk_index: int = 1,
+    chunk_count: int = 1,
+) -> list[dict]:
     """构建文本精修 prompt。"""
     if len(cleaned_text) > max_input_chars:
         text = cleaned_text[:max_input_chars]
@@ -108,8 +138,46 @@ def build_refine_messages(cleaned_text: str, *, max_input_chars: int = 8000) -> 
 
     return [
         {"role": "system", "content": SYSTEM_PROMPT},
-        {"role": "user", "content": f"请精修以下 cleaned_text：\n\n{text}"},
+        {
+            "role": "user",
+            "content": (
+                f"请精修以下 cleaned_text 第 {chunk_index}/{chunk_count} 段。"
+                "仅润色本段，不要补写其他段落：\n\n"
+                f"{text}\n\n/no_think"
+            ),
+        },
     ]
+
+
+def _split_refine_chunks(text: str, *, max_chars: int) -> list[str]:
+    """按空行/行边界切分精修文本，降低单次 LLM 请求负担。"""
+    chunks: list[str] = []
+    current: list[str] = []
+    current_len = 0
+
+    blocks = re.split(r"(\n\n+)", text)
+    for block in blocks:
+        if not block:
+            continue
+        if current and current_len + len(block) > max_chars:
+            chunks.append("".join(current).strip())
+            current = []
+            current_len = 0
+        if len(block) > max_chars:
+            for line in block.splitlines(keepends=True):
+                if current and current_len + len(line) > max_chars:
+                    chunks.append("".join(current).strip())
+                    current = []
+                    current_len = 0
+                current.append(line)
+                current_len += len(line)
+            continue
+        current.append(block)
+        current_len += len(block)
+
+    if current:
+        chunks.append("".join(current).strip())
+    return [chunk for chunk in chunks if chunk]
 
 
 def _sanitize_refined_text(raw_response: str) -> str:
