@@ -16,11 +16,13 @@ from back_end.app.models import (
     DIRECTION_VALUES,
     AnalysisResult,
     Article,
+    ArticleProductSegment,
     ArticleText,
     ManualConfirmation,
     TaskLog,
 )
 from back_end.app.repositories.base import BaseRepository
+from pn06.product_catalog import product_key_for_name
 
 
 class ArticleRepository(BaseRepository):
@@ -76,6 +78,7 @@ class ArticleRepository(BaseRepository):
             .options(
                 selectinload(Article.text),
                 selectinload(Article.analysis_results),
+                selectinload(Article.product_segments),
                 selectinload(Article.task_logs),
                 selectinload(Article.manual_confirmations),
             )
@@ -168,11 +171,118 @@ class ArticleRepository(BaseRepository):
         self.session.flush()
         return article_text
 
+    def save_product_segments(
+        self,
+        article_id: int,
+        segments: list[dict[str, Any]],
+    ) -> list[ArticleProductSegment]:
+        """保存按品种切分的正文片段；每次重跑替换该文章旧分段。"""
+        article = self.require_article(article_id)
+        existing = list(
+            self.session.scalars(
+                select(ArticleProductSegment).where(ArticleProductSegment.article_id == article_id)
+            ).all()
+        )
+        for segment in existing:
+            self.session.delete(segment)
+        self.session.flush()
+
+        saved: list[ArticleProductSegment] = []
+        for index, item in enumerate(segments):
+            product = str(item.get("product") or "未知").strip() or "未知"
+            contract = item.get("contract")
+            contract = str(contract).strip() if contract is not None and str(contract).strip() else None
+            cleaned_text = str(item.get("cleaned_text") or "").strip()
+            refined_text_value = item.get("refined_text")
+            refined_text = (
+                str(refined_text_value).strip()
+                if refined_text_value is not None and str(refined_text_value).strip()
+                else None
+            )
+            segment = ArticleProductSegment(
+                article_id=article_id,
+                product=product,
+                product_key=str(item.get("product_key") or product_key_for_name(product)),
+                raw_product_name=(
+                    str(item.get("raw_product_name")).strip()
+                    if item.get("raw_product_name") else None
+                ),
+                resolution_method=str(item.get("resolution_method") or "unknown"),
+                resolution_confidence=float(item.get("resolution_confidence") or item.get("confidence") or 0.0),
+                contract=contract,
+                contract_key=self._normalize_contract_key(contract),
+                segment_index=int(item.get("segment_index", index) or 0),
+                section_type=str(item.get("section_type") or "core").strip() or "core",
+                heading=(str(item.get("heading")).strip() if item.get("heading") else None),
+                cleaned_text=cleaned_text,
+                refined_text=refined_text,
+                cleaned_length=len(cleaned_text),
+                refined_length=len(refined_text or ""),
+                start_char=item.get("start_char"),
+                end_char=item.get("end_char"),
+                confidence=float(item.get("confidence") or 0.0),
+            )
+            self.session.add(segment)
+            saved.append(segment)
+
+        self.session.flush()
+        self.session.expire(article, ["product_segments"])
+        return saved
+
+    def get_product_segments(self, article_id: int) -> list[ArticleProductSegment]:
+        """读取一篇文章的品种分段，按原文顺序排序。"""
+        return list(
+            self.session.scalars(
+                select(ArticleProductSegment)
+                .where(ArticleProductSegment.article_id == article_id)
+                .order_by(
+                    ArticleProductSegment.segment_index.asc(),
+                    ArticleProductSegment.id.asc(),
+                )
+            ).all()
+        )
+
+    def find_product_segment(
+        self,
+        article_id: int,
+        product: str,
+        contract_key: str | None = None,
+    ) -> ArticleProductSegment | None:
+        """查找最适合某个分析结果的品种正文片段。"""
+        product = (product or "").strip()
+        if not product:
+            return None
+        segments = self.get_product_segments(article_id)
+        displayable = [
+            segment
+            for segment in segments
+            if segment.product == product and segment.section_type != "unknown"
+        ]
+        normalized_contract = self._normalize_contract_key(contract_key)
+        if normalized_contract:
+            exact = [segment for segment in displayable if segment.contract_key == normalized_contract]
+            if exact:
+                displayable = exact
+        if not displayable:
+            return None
+
+        section_priority = {"core": 0, "ocr": 1, "ai": 2, "table": 3, "mixed": 4}
+        return sorted(
+            displayable,
+            key=lambda item: (
+                section_priority.get(item.section_type, 9),
+                -float(item.confidence or 0.0),
+                item.segment_index,
+                item.id or 0,
+            ),
+        )[0]
+
     def save_analysis_result(
         self,
         article_id: int,
         *,
         product: str,
+        product_key: str | None = None,
         direction: str,
         reason: str | None,
         confidence: float,
@@ -193,6 +303,7 @@ class ArticleRepository(BaseRepository):
             [
                 {
                     "product": product,
+                    "product_key": product_key or product_key_for_name(product),
                     "contract": contract,
                     "direction": direction,
                     "reason": reason,
@@ -248,6 +359,7 @@ class ArticleRepository(BaseRepository):
                 {
                     **item,
                     "product": product,
+                    "product_key": str(item.get("product_key") or product_key_for_name(product)),
                     "contract": contract,
                     "contract_key": self._normalize_contract_key(contract),
                     "direction": direction,
@@ -265,8 +377,17 @@ class ArticleRepository(BaseRepository):
             existing_results = list(self.session.scalars(
                 select(AnalysisResult).where(AnalysisResult.article_id == article_id)
             ).all())
-            for existing in existing_results:
-                existing.is_primary = False
+            manual_primary = any(
+                existing.analysis_method == "manual" and existing.is_primary
+                for existing in existing_results
+            )
+            incoming_manual = any(item["analysis_method"] == "manual" for item in normalized)
+            if manual_primary and not incoming_manual:
+                for item in normalized:
+                    item["is_primary"] = False
+            else:
+                for existing in existing_results:
+                    existing.is_primary = False
 
         saved: list[AnalysisResult] = []
         for item in normalized:
@@ -280,8 +401,12 @@ class ArticleRepository(BaseRepository):
             if result is None:
                 result = AnalysisResult(article_id=article_id)
                 self.session.add(result)
+            elif result.analysis_method == "manual" and item["analysis_method"] != "manual":
+                saved.append(result)
+                continue
 
             result.product = item["product"]
+            result.product_key = item["product_key"]
             result.contract = item["contract"]
             result.contract_key = item["contract_key"]
             result.direction = item["direction"]
@@ -405,6 +530,7 @@ class ArticleRepository(BaseRepository):
         self,
         *,
         product: str | None = None,
+        product_key: str | None = None,
         company: str | None = None,
         direction: str | None = None,
         status: int | None = None,
@@ -432,6 +558,7 @@ class ArticleRepository(BaseRepository):
         """
         stmt = self._article_filter_stmt(
             product=product,
+            product_key=product_key,
             company=company,
             direction=direction,
             status=status,
@@ -596,6 +723,7 @@ class ArticleRepository(BaseRepository):
         result_id: int,
         *,
         product: str,
+        product_key: str | None = None,
         direction: str,
         reason: str | None,
         confidence: float,
@@ -636,10 +764,12 @@ class ArticleRepository(BaseRepository):
         confirmation = ManualConfirmation(
             article_id=result.article_id,
             original_product=result.product,
+            original_product_key=result.product_key,
             original_direction=result.direction,
             original_reason=result.reason,
             original_confidence=result.confidence,
             confirmed_product=product,
+            confirmed_product_key=product_key or product_key_for_name(product) or None,
             confirmed_direction=direction,
             confirmed_reason=reason,
             confirmed_confidence=confidence,
@@ -650,6 +780,7 @@ class ArticleRepository(BaseRepository):
 
         # 用修正数据覆盖原分析结果
         result.product = product
+        result.product_key = product_key or product_key_for_name(product)
         result.contract_key = self._normalize_contract_key(result.contract)
         result.direction = direction
         result.reason = reason
@@ -677,6 +808,7 @@ class ArticleRepository(BaseRepository):
         self,
         *,
         product: str | None,
+        product_key: str | None,
         company: str | None,
         direction: str | None,
         status: int | None,
@@ -696,6 +828,15 @@ class ArticleRepository(BaseRepository):
                     and_(
                         displayable_clause,
                         AnalysisResult.product == product,
+                    )
+                )
+            )
+        if product_key:
+            stmt = stmt.where(
+                Article.analysis_results.any(
+                    and_(
+                        displayable_clause,
+                        AnalysisResult.product_key == product_key,
                     )
                 )
             )

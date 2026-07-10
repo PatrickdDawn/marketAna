@@ -29,26 +29,12 @@ const activeResult = computed(() => {
   return allResults.value.find((r) => r.product === activeProduct.value) ?? allResults.value[0] ?? null
 })
 
-// 结论依据：从 refined_text 中截取"核心正文"或"图文识别正文"之后的内容
+// 结论依据：优先使用后端按品种切分后的正文
 const evidenceText = computed(() => {
-  const text = detail.value?.text?.refined_text || ''
-  if (!text) return ''
-
-  // 按顺序尝试几个标记词，找到第一个出现的
-  const markers = ['核心正文', '图文识别正文', '观点及操作策略', '观点及策略']
-  let startIdx = -1
-  for (const marker of markers) {
-    const idx = text.indexOf(marker)
-    if (idx !== -1) {
-      startIdx = idx
-      break
-    }
-  }
-
-  if (startIdx !== -1) {
-    return text.slice(startIdx)
-  }
-  return text
+  return activeResult.value?.evidence?.refined_text ||
+    activeResult.value?.evidence?.cleaned_text ||
+    activeResult.value?.evidence?.excerpts?.map((item) => item.quote).filter(Boolean).join('\n\n') ||
+    ''
 })
 
 // 其他品种（本研报还覆盖）
@@ -144,7 +130,10 @@ onMounted(fetchData)
 
         <!-- 结论依据 -->
         <div v-if="evidenceText" class="evidence-section">
-          <h3 class="evidence-heading">结论依据</h3>
+          <h3 class="evidence-heading">
+            结论依据
+            <span v-if="activeResult.evidence?.section_type === 'mixed'" class="evidence-badge">混合片段</span>
+          </h3>
           <div class="refined-text">{{ evidenceText }}</div>
         </div>
       </div>
@@ -308,13 +297,25 @@ onMounted(fetchData)
   font-weight: 600;
   color: #1a1a2e;
   margin: 0 0 12px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.evidence-badge {
+  font-size: 12px;
+  color: #999;
+  background: #f5f6fa;
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-weight: 500;
 }
 
 .refined-text {
   font-size: 14px;
   color: #333;
   line-height: 1.9;
-  white-space: pre-wrap;
+  white-space: pre-line;
   word-wrap: break-word;
 }
 

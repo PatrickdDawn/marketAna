@@ -18,6 +18,7 @@ router = APIRouter(prefix="/api/articles", tags=["articles"])
 @router.get("")
 def list_articles(
     product: str | None = None,
+    product_key: str | None = None,
     company: str | None = None,
     direction: str | None = None,
     status: int | None = None,
@@ -48,6 +49,7 @@ def list_articles(
     repository = ArticleRepository(session)
     items, _total = repository.list_articles(
         product=product,
+        product_key=product_key,
         company=company,
         direction=direction,
         status=status,

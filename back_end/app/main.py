@@ -8,6 +8,7 @@ from back_end.app.api.companies import router as companies_router
 from back_end.app.api.dashboard import router as dashboard_router
 from back_end.app.api.health import router as health_router
 from back_end.app.api.products import router as products_router
+from back_end.app.api.product_review import router as product_review_router
 from back_end.app.api.results import router as results_router
 from back_end.app.api.tasks import router as tasks_router
 from back_end.app.api.trends import router as trends_router
@@ -64,6 +65,7 @@ def create_app() -> FastAPI:
     app.include_router(dashboard_router)
     app.include_router(articles_router)
     app.include_router(products_router)
+    app.include_router(product_review_router)
     app.include_router(companies_router)
     app.include_router(trends_router)
     app.include_router(tasks_router)

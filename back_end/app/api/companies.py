@@ -10,6 +10,7 @@ from back_end.app.core.display import displayable_product_clause
 from back_end.app.core.responses import success_response
 from back_end.app.core.status import ArticleProcessingStatus
 from back_end.app.models import AnalysisResult, Article
+from pn06.product_catalog import product_group
 
 
 router = APIRouter(prefix="/api/companies", tags=["companies"])
@@ -57,6 +58,8 @@ def get_companies(session: Session = Depends(get_session)) -> dict:
             "article_id": article.id,
             "result_id": result.id,
             "product": result.product,
+            "product_key": result.product_key,
+            "product_group": product_group(result.product_key),
             "contract": result.contract,
             "direction": result.direction,
             "confidence": result.confidence,

@@ -32,10 +32,16 @@ cp .env.example .env
 uv run python -c "from back_end.app.core.database import create_database_tables; create_database_tables()"
 ```
 
-或者使用初始化脚本：
+或者使用初始化脚本（推荐用模块方式，避免直接运行脚本时找不到 `back_end` 包）：
 
 ```bash
-uv run python scripts/init_db.py
+uv run python -m scripts.init_db
+```
+
+如果数据库是在品种归一化功能上线前创建的，先备份数据库，再执行一次迁移：
+
+```bash
+mysql -u marketana -p marketana < scripts/migrate_product_resolution_20260710.sql
 ```
 
 ### 3. 导入本地数据文件
@@ -73,7 +79,7 @@ uv run uvicorn back_end.app.main:app --reload --host 0.0.0.0
 - 创建数据库连接池
 - 启动后台 Scheduler 定时调度器
 - Scheduler **每 5 分钟**自动扫描待处理文章（`status=0`）
-- 扫描到的文章自动执行完整流水线：**解析 → 清洗 → LLM 文本精修 → 规则引擎分析 → LLM 分析**
+- 扫描到的文章自动执行完整流水线：**解析 → 清洗 → 品种分段 → 未知品种归一化 → LLM 文本精修 → 规则引擎分析 → LLM 分析**
 
 每个阶段的具体含义：
 
@@ -81,27 +87,83 @@ uv run uvicorn back_end.app.main:app --reload --host 0.0.0.0
 |------|------|------|------|
 | **parser** | 从源文件（PDF/HTML/图片）提取原始文本 | 文件 URL | `raw_text` 写入数据库 |
 | **cleaner** | 清洗原始文本（去噪、规范化） | `raw_text` | `cleaned_text` 写入数据库 |
-| **refiner** | 将清洗文本润色成通俗自然的展示文本 | `cleaned_text` | `refined_text` 写入数据库（失败不中断） |
-| **rule_engine** | 基于规则的市场方向判断 | `cleaned_text` | 分析结果（方向+置信度） |
-| **llm_infer** | LLM 深度分析（低置信度时触发） | `cleaned_text` | 分析结果（方向+理由） |
+| **product_segmenter** | 按品种切分核心正文/图文识别正文 | `cleaned_text` | `article_product_segments` 写入数据库 |
+| **product_resolver** | 批量归一化未知品种，失败不阻断流水线 | 未知品种分段 | 标准 `product_key` 或待人工审核记录 |
+| **refiner** | 将有效品种分段润色成通俗自然的展示文本 | `article_product_segments.cleaned_text` | 段级 `refined_text` 写入数据库（失败不中断） |
+| **rule_engine** | 基于规则的市场方向判断 | 品种分段优先，回退 `cleaned_text` | 分析结果（方向+置信度） |
+| **llm_infer** | LLM 深度分析（低置信度时触发） | 品种分段优先，回退 `cleaned_text` | 分析结果（方向+理由） |
 
 ### 5. （可选）手动触发处理
 
-如果不想等待定时器自动触发，可以手动调用 API 立即执行：
+根目录的 `main.py` 只是占位入口，执行它只会打印 `Hello from marketana!`，不会触发数据处理。
+
+如果不想等待定时器自动触发，可以用以下任一方式立即执行。
+
+#### 方式 A：通过后端 API 触发
+
+先启动后端服务：
+
+```bash
+uv run uvicorn back_end.app.main:app --reload --host 0.0.0.0
+```
 
 **处理所有待处理文章：**
 
 ```bash
-curl -X POST http://127.0.0.1:8000/api/tasks/run
+curl -X POST http://localhost:8000/api/tasks/run
 ```
 
 **处理单篇文章：**
 
 ```bash
+curl -X POST http://localhost:8000/api/tasks/run \
+  -H "Content-Type: application/json" \
+  -d '{"article_id": 7}'
+```
+
+也可以指定批量上限：
+
+```bash
 curl -X POST http://127.0.0.1:8000/api/tasks/run \
   -H "Content-Type: application/json" \
-  -d '{"article_id": 1}'
+  -d '{"limit": 20}'
 ```
+
+#### 方式 B：不启动后端，直接从命令行触发数据库任务
+
+处理最多 20 篇待处理文章：
+
+```bash
+uv run python -c "from back_end.app.core.database import get_session; from back_end.app.api.tasks import run_task; from back_end.app.api.schemas import TaskRunRequest; s=next(get_session()); print(run_task(TaskRunRequest(limit=20), session=s)); s.close()"
+```
+
+处理指定文章，例如 `article_id=1`：
+
+```bash
+uv run python -c "from back_end.app.core.database import get_session; from pn11 import run_pipeline; s=next(get_session()); ok=run_pipeline(1, s); s.commit(); print({'article_id': 1, 'success': ok}); s.close()"
+```
+
+#### 方式 C：单文件手动调试，不写入正式数据库
+
+适合排查某个 PDF/HTML/图片文件的解析、清洗、识别和分段效果：
+
+```bash
+uv run python tests/manual_single_file_pipeline.py data/20250401/323354/浙商期货_323354_0.html --output-dir tests/outputs/
+```
+
+如果暂时不想调用真实 LLM：
+
+```bash
+uv run python tests/manual_single_file_pipeline.py data/20250401/323354/浙商期货_323354_0.html --output-dir tests/outputs --skip-llm
+```
+
+输出文件包括：
+
+- `01_parsed_raw_text.txt`
+- `02_cleaned_text.txt`
+- `03_recognition_text.txt`
+- `04_refined_text.txt`
+- `05_product_segments.txt`
 
 ### 6. （可选）查看处理结果
 
@@ -159,3 +221,14 @@ DATABASE_URL=mysql+pymysql://marketana:marketana_password@127.0.0.1:3306/marketa
 ```
 
 其他可配置的环境变量参见 `.env.example`。
+
+LLM 调用较慢时可以调整：
+
+```env
+LLM_TIMEOUT_SECONDS=300  # 单次请求最多等待秒数
+LLM_MAX_RETRIES=1        # 超时/5xx/429 后最多重试次数
+```
+
+前端 `/product-review` 提供“未知片段”和“别名候选”两级审核。未知片段确认后只修正当前文章并重新分析；新别名批准后才参与后续文章的全局匹配。
+
+如果日志出现 `请求超时`，通常表示模型服务在该时间内没有返回结果。可以适当增大 `LLM_TIMEOUT_SECONDS`，或减小批量处理数量，避免多篇文章连续等待。

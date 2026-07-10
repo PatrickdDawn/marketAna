@@ -93,6 +93,14 @@ class Article(Base):
         back_populates="article",
         cascade="all, delete-orphan",
     )
+    product_segments: Mapped[list["ArticleProductSegment"]] = relationship(
+        back_populates="article",
+        cascade="all, delete-orphan",
+    )
+    product_resolutions: Mapped[list["ProductResolution"]] = relationship(
+        back_populates="article",
+        cascade="all, delete-orphan",
+    )
     task_logs: Mapped[list["TaskLog"]] = relationship(
         back_populates="article",
         cascade="all, delete-orphan",  # 一对多
@@ -153,6 +161,60 @@ class ArticleText(Base):
     article: Mapped[Article] = relationship(back_populates="text")
 
 
+class ArticleProductSegment(Base):
+    """按品种切分后的文章正文片段，供分析依据和前端展示使用。"""
+    __tablename__ = "article_product_segments"
+    __table_args__ = (
+        UniqueConstraint(
+            "article_id",
+            "product",
+            "contract_key",
+            "section_type",
+            "segment_index",
+            name="uq_article_product_segments_scope",
+        ),
+        Index("ix_article_product_segments_product", "article_id", "product", "contract_key"),
+        Index("ix_article_product_segments_section", "article_id", "section_type"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    article_id: Mapped[int] = mapped_column(
+        ForeignKey("articles.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    product: Mapped[str] = mapped_column(String(128), nullable=False)
+    product_key: Mapped[str] = mapped_column(String(64), nullable=False, default="", index=True)
+    raw_product_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    resolution_method: Mapped[str] = mapped_column(String(32), nullable=False, default="unknown")
+    resolution_confidence: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+    contract: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    contract_key: Mapped[str] = mapped_column(String(64), nullable=False, default="")
+    segment_index: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    section_type: Mapped[str] = mapped_column(String(32), nullable=False, default="core")
+    heading: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    cleaned_text: Mapped[str | None] = mapped_column(TEXT_BODY, nullable=True)
+    refined_text: Mapped[str | None] = mapped_column(TEXT_BODY, nullable=True)
+    cleaned_length: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    refined_length: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    start_char: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    end_char: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    confidence: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime,
+        nullable=False,
+        server_default=func.now(),
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime,
+        nullable=False,
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
+
+    article: Mapped[Article] = relationship(back_populates="product_segments")
+
+
 class AnalysisResult(Base):
     """分析结果表 - 存储 LLM 或规则引擎对文章的市场分析结论。"""
     __tablename__ = "analysis_results"
@@ -188,6 +250,7 @@ class AnalysisResult(Base):
         index=True,
     )
     product: Mapped[str] = mapped_column(String(128), nullable=False)       # 关联产品名称
+    product_key: Mapped[str] = mapped_column(String(64), nullable=False, default="", index=True)
     contract: Mapped[str | None] = mapped_column(String(64), nullable=True) # 合约，如 05、2505
     contract_key: Mapped[str] = mapped_column(String(64), nullable=False, default="") # 合约归一化键
     direction: Mapped[str] = mapped_column(String(16), nullable=False)      # 市场方向：看涨/看跌/中性
@@ -274,11 +337,13 @@ class ManualConfirmation(Base):
     )
     # 原始值（LLM 自动分析的结果）
     original_product: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    original_product_key: Mapped[str | None] = mapped_column(String(64), nullable=True)
     original_direction: Mapped[str | None] = mapped_column(String(16), nullable=True)
     original_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
     original_confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
     # 人工修正后的值
     confirmed_product: Mapped[str] = mapped_column(String(128), nullable=False)
+    confirmed_product_key: Mapped[str | None] = mapped_column(String(64), nullable=True)
     confirmed_direction: Mapped[str] = mapped_column(String(16), nullable=False)
     confirmed_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
     confirmed_confidence: Mapped[float] = mapped_column(Float, nullable=False)
@@ -291,3 +356,67 @@ class ManualConfirmation(Base):
     )
     # 关联Article表的manual_confirmations属性，建立一对多关系
     article: Mapped[Article] = relationship(back_populates="manual_confirmations")
+
+
+class ProductResolution(Base):
+    """Auditable per-article resolution for an unknown product block."""
+
+    __tablename__ = "product_resolutions"
+    __table_args__ = (
+        UniqueConstraint("article_id", "block_fingerprint", name="uq_product_resolution_block"),
+        Index("ix_product_resolutions_status_created", "status", "created_at"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    article_id: Mapped[int] = mapped_column(
+        ForeignKey("articles.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    block_fingerprint: Mapped[str] = mapped_column(String(64), nullable=False)
+    segment_index: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    raw_name: Mapped[str] = mapped_column(String(255), nullable=False, default="")
+    normalized_raw_name: Mapped[str] = mapped_column(String(255), nullable=False, default="", index=True)
+    excerpt: Mapped[str | None] = mapped_column(Text, nullable=True)
+    start_char: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    end_char: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    suggested_product_key: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    resolved_product_key: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    confidence: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+    method: Mapped[str] = mapped_column(String(32), nullable=False, default="unknown")
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="pending", index=True)
+    reviewed_by: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    review_note: Mapped[str | None] = mapped_column(Text, nullable=True)
+    reviewed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, nullable=False, server_default=func.now(), onupdate=func.now()
+    )
+
+    article: Mapped[Article] = relationship(back_populates="product_resolutions")
+
+
+class ProductAlias(Base):
+    """A learned product alias which only matches globally after approval."""
+
+    __tablename__ = "product_aliases"
+    __table_args__ = (
+        UniqueConstraint("normalized_alias", "product_key", name="uq_product_alias_target"),
+        Index("ix_product_aliases_status_created", "status", "created_at"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    alias: Mapped[str] = mapped_column(String(255), nullable=False)
+    normalized_alias: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
+    product_key: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="pending", index=True)
+    source_resolution_id: Mapped[int | None] = mapped_column(
+        ForeignKey("product_resolutions.id", ondelete="SET NULL"), nullable=True
+    )
+    occurrence_count: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    confidence: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+    reviewed_by: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    review_note: Mapped[str | None] = mapped_column(Text, nullable=True)
+    reviewed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, nullable=False, server_default=func.now(), onupdate=func.now()
+    )

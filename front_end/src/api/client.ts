@@ -5,6 +5,9 @@ import type {
   HeatmapData,
   ArticleItem,
   ArticleDetail,
+  ProductCatalogItem,
+  ProductResolutionItem,
+  ProductAliasItem,
 } from './types'
 
 // 把 ../mock/products.json 这个 JSON 文件当成一个模块导入，并赋值给变量 productsMock。
@@ -34,6 +37,19 @@ async function fetchApi<T>(url: string): Promise<ApiResponse<T>> {
   return res.json()
 }
 
+async function postApi<T>(url: string, body: object = {}): Promise<ApiResponse<T>> {
+  const res = await fetch(`${API_BASE}${url}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  })
+  const payload = await res.json()
+  if (!res.ok) {
+    throw new Error(payload?.message || `HTTP ${res.status}: ${res.statusText}`)
+  }
+  return payload
+}
+
 // ===== API 接口 =====
 
 export async function getProducts(): Promise<ApiResponse<ProductItem[]>> {
@@ -59,4 +75,34 @@ export async function getArticles(): Promise<ApiResponse<ArticleItem[]>> {
 export async function getArticleDetail(id: number): Promise<ApiResponse<ArticleDetail>> {
   if (USE_MOCK) return fetchMock(articleDetailMock as ApiResponse<ArticleDetail>)
   return fetchApi(`/api/articles/${id}`)
+}
+
+export function getProductCatalog(): Promise<ApiResponse<ProductCatalogItem[]>> {
+  return fetchApi('/api/product-catalog')
+}
+
+export function getPendingProductResolutions(): Promise<ApiResponse<ProductResolutionItem[]>> {
+  return fetchApi('/api/product-resolutions?status=pending')
+}
+
+export function confirmProductResolution(
+  id: number,
+  productKey: string,
+): Promise<ApiResponse<ProductResolutionItem>> {
+  return postApi(`/api/product-resolutions/${id}/confirm`, { product_key: productKey })
+}
+
+export function getPendingProductAliases(): Promise<ApiResponse<ProductAliasItem[]>> {
+  return fetchApi('/api/product-aliases?status=pending')
+}
+
+export function reviewProductAlias(
+  id: number,
+  action: 'approve' | 'reject',
+): Promise<ApiResponse<ProductAliasItem>> {
+  return postApi(`/api/product-aliases/${id}/${action}`)
+}
+
+export function runArticleTask(articleId: number): Promise<ApiResponse<Record<string, unknown>>> {
+  return postApi('/api/tasks/run', { article_id: articleId })
 }

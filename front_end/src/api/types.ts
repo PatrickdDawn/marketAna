@@ -25,6 +25,8 @@ export interface CompanyPrediction {
   article_id: number
   result_id?: number
   product: string
+  product_key?: string
+  product_group?: string
   contract?: string | null
   direction: Direction
   confidence: number
@@ -35,6 +37,8 @@ export interface CompanyPrediction {
 // ===== 品种页面 =====
 export interface ProductItem {
   product: string
+  product_key?: string
+  product_group?: string
   predictions: Prediction[]
 }
 
@@ -48,6 +52,8 @@ export interface CompanyItem {
 export interface HeatmapData {
   date: string
   product: string
+  product_key?: string
+  product_group?: string
   value: number // 正值=看涨强度, 负值=看跌强度, 0=中性
 }
 
@@ -77,6 +83,8 @@ export interface ArticleDetail {
     created_at: string
     updated_at: string
     product: string | null
+    product_key?: string | null
+    product_group?: string | null
     direction: string | null
     reason: string | null
     confidence: number | null
@@ -95,6 +103,8 @@ export interface ArticleDetail {
   analysis_result: {
     id?: number
     product: string
+    product_key?: string
+    product_group?: string
     contract?: string | null
     contract_key?: string
     direction: string
@@ -117,7 +127,7 @@ export interface ArticleDetail {
 
 export interface EvidenceExcerpt {
   quote: string
-  source: 'cleaned_text' | 'raw_text' | 'analysis_reason'
+  source: 'segment' | 'cleaned_text' | 'raw_text' | 'analysis_reason'
   start_char: number | null
   end_char: number | null
   match_type: 'reason' | 'keyword' | 'fallback'
@@ -125,7 +135,10 @@ export interface EvidenceExcerpt {
 
 export interface AnalysisEvidence {
   summary: string
-  source: 'cleaned_text' | 'raw_text' | 'analysis_reason'
+  source: 'segment' | 'cleaned_text' | 'raw_text' | 'analysis_reason'
+  section_type?: 'core' | 'ocr' | 'table' | 'ai' | 'mixed' | 'unknown'
+  cleaned_text?: string
+  refined_text?: string
   excerpts: EvidenceExcerpt[]
   notes: string
 }
@@ -134,6 +147,8 @@ export interface AnalysisResultItem {
   id: number
   article_id: number
   product: string
+  product_key?: string
+  product_group?: string
   contract: string | null
   contract_key: string
   direction: string
@@ -164,16 +179,61 @@ export interface ManualConfirmationItem {
   id: number
   article_id: number
   original_product: string | null
+  original_product_key?: string | null
   original_direction: string | null
   original_reason: string | null
   original_confidence: number | null
   confirmed_product: string
+  confirmed_product_key?: string | null
   confirmed_direction: string
   confirmed_reason: string | null
   confirmed_confidence: number
   confirmed_by: string | null
   note: string | null
   confirmed_at: string
+}
+
+export interface ProductCatalogItem {
+  product_key: string
+  display_name: string
+  official_name: string
+  exchange: string
+  symbol: string
+  product_group: string
+  active: boolean
+}
+
+export interface ProductResolutionItem {
+  id: number
+  article_id: number
+  article_title: string
+  raw_name: string
+  excerpt: string | null
+  suggested_product_key: string | null
+  suggested_product: string | null
+  resolved_product_key: string | null
+  resolved_product: string | null
+  confidence: number
+  method: string
+  status: string
+  reviewed_by: string | null
+  review_note: string | null
+  created_at: string
+  reanalysis_required?: boolean
+}
+
+export interface ProductAliasItem {
+  id: number
+  alias: string
+  product_key: string
+  product: string
+  product_group: string
+  status: string
+  occurrence_count: number
+  confidence: number
+  reviewed_by: string | null
+  review_note: string | null
+  created_at: string
 }
 
 // ===== 方向对应的颜色和标签 =====

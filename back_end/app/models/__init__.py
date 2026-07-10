@@ -3,8 +3,11 @@ from back_end.app.models.article import (
     DIRECTION_VALUES,
     AnalysisResult,
     Article,
+    ArticleProductSegment,
     ArticleText,
     ManualConfirmation,
+    ProductAlias,
+    ProductResolution,
     TaskLog,
 )
 
@@ -13,7 +16,10 @@ __all__ = [
     "DIRECTION_VALUES",
     "AnalysisResult",
     "Article",
+    "ArticleProductSegment",
     "ArticleText",
     "ManualConfirmation",
+    "ProductAlias",
+    "ProductResolution",
     "TaskLog",
 ]

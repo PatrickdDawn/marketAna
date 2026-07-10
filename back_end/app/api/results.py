@@ -20,6 +20,7 @@ def confirm_result(
     confirmation = repository.confirm_result(
         result_id,
         product=request.product,
+        product_key=request.product_key,
         direction=request.direction,
         reason=request.reason,
         confidence=request.confidence,

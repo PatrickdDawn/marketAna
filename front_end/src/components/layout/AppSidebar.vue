@@ -8,6 +8,7 @@ const menuItems = [
   { name: '期货公司', path: '/companies', icon: '🏢' },
   { name: '趋势分析', path: '/trends', icon: '📈' },
   { name: '资讯', path: '/articles', icon: '📰' },
+  { name: '品种审核', path: '/product-review', icon: '✓' },
 ]
 
 function isActive(path: string) {
